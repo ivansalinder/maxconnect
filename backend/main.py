@@ -1,13 +1,16 @@
-from fastapi import FastAPI, BackgroundTasks, Request
-from pydantic import BaseModel
-import sqlite3
-from typing import List
-import httpx
 import os
+import sqlite3
+import logging
+import httpx
+from fastapi import FastAPI, BackgroundTasks, Request
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="MAX TeamPlay API", description="Бэкенд для радара досуга (Уфа)")
-
-from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,23 +20,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Токен берем из переменных окружения (безопасность по ТЗ)
-MAX_BOT_TOKEN = os.getenv("MAX_BOT_TOKEN", "test_token")
-MAX_API_URL = "https://api.max.ru/v1" # Замени на актуальный URL API MAX из их доки
+MAX_BOT_TOKEN = os.getenv("MAX_BOT_TOKEN", "f9LHodD0cOL5VFLxyvlUr0pgowbe9NfMW02XI41VCwmgvSv91cQz7_1bPZ34wpuRb55aaNAHptfXO_vuZt8B")
+MAX_API_URL = "https://platform-api2.max.ru"
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://saturate-undecided-perfected.ngrok-free.dev")
 
 def init_db():
     conn = sqlite3.connect('teamplay.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS lobbies
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                  title TEXT, 
-                  category TEXT, 
-                  location TEXT, 
-                  participants INTEGER, 
-                  max_participants INTEGER, 
-                  time TEXT)''')
+                  title TEXT, category TEXT, location TEXT, 
+                  participants INTEGER, max_participants INTEGER, time TEXT)''')
     
-    # Синтетический мок-слой для Уфы
     c.execute("SELECT COUNT(*) FROM lobbies")
     if c.fetchone()[0] == 0:
         mock_data = [
@@ -43,29 +41,55 @@ def init_db():
             ('Волейбол', 'Спорт', 'Манеж УГНТУ', 8, 12, 'Сегодня 21:00')
         ]
         c.executemany("INSERT INTO lobbies (title, category, location, participants, max_participants, time) VALUES (?, ?, ?, ?, ?, ?)", mock_data)
-    
     conn.commit()
     conn.close()
 
 init_db()
 
-async def send_max_message(chat_id: str, text: str):
-    """Асинхронная отправка сообщения через API МАХ"""
-    async with httpx.AsyncClient(verify=False) as client: # verify=False обходит ошибку SEC_E_UNTRUSTED_ROOT
-        try:
-            payload = {"chat_id": chat_id, "text": text}
-            headers = {"Authorization": f"Bearer {MAX_BOT_TOKEN}"}
-            # Убедись, что эндпоинт отправки сообщения совпадает с докой МАХ
-            await client.post(f"{MAX_API_URL}/messages/send", json=payload, headers=headers)
-        except Exception as e:
-            print(f"Ошибка интеграции с МАХ: {e}")
+class JoinRequest(BaseModel):
+    lobby_id: int
+    user_id: str 
+    organizer_chat_id: str 
 
-class Lobby(BaseModel):
-    title: str
-    category: str
-    location: str
-    max_participants: int
-    time: str
+async def send_max_message(text: str, target_id: str, is_group: bool = False, with_webapp: bool = False):
+    headers = {
+        "Authorization": MAX_BOT_TOKEN,
+        "Content-Type": "application/json"
+    }
+
+    params = {"chat_id": target_id} if is_group else {"user_id": target_id}
+    
+    payload = {
+        "text": text
+    }
+
+    if with_webapp:
+        # Правильный параметр для платформ семейства MyTeam / MAX API
+        payload["inline_keyboard_row"] = [
+            [
+                {
+                    "text": "Открыть радар досуга",
+                    "url": WEBAPP_URL
+                }
+            ]
+        ]
+
+    async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+        try:
+            response = await client.post(
+                f"{MAX_API_URL}/messages", 
+                params=params, 
+                json=payload, 
+                headers=headers
+            )
+            logger.info(f"Статус отправки MAX: {response.status_code}")
+            logger.info(f"Ответ MAX: {response.text}")
+        except Exception as e:
+            logger.error(f"Исключение при вызове MAX API: {e}")
+
+@app.get("/")
+def health_check():
+    return {"status": "ok"}
 
 @app.get("/api/lobbies", response_model=List[dict])
 def get_lobbies():
@@ -77,45 +101,40 @@ def get_lobbies():
     conn.close()
     return lobbies
 
-@app.post("/api/lobbies")
-def create_lobby(lobby: Lobby):
-    conn = sqlite3.connect('teamplay.db')
-    c = conn.cursor()
-    c.execute("INSERT INTO lobbies (title, category, location, participants, max_participants, time) VALUES (?, ?, ?, ?, ?, ?)",
-              (lobby.title, lobby.category, lobby.location, 1, lobby.max_participants, lobby.time))
-    conn.commit()
-    conn.close()
-    return {"status": "success"}
-
-class JoinRequest(BaseModel):
-    lobby_id: int
-    user_id: str # ID участника в МАХ
-    organizer_chat_id: str # Куда отправлять пуш
-
 @app.post("/api/join")
 async def join_lobby(req: JoinRequest, background_tasks: BackgroundTasks):
-    # Уведомляем организатора в фоне, чтобы не задерживать ответ фронтенду
     text_for_organizer = f"К вашему сбору #{req.lobby_id} присоединился новый участник!"
-    background_tasks.add_task(send_max_message, req.organizer_chat_id, text_for_organizer)
+    background_tasks.add_task(send_max_message, text=text_for_organizer, target_id=req.organizer_chat_id)
     
-    # Отбивка самому участнику
     text_for_user = "Вы успешно присоединились к мероприятию! Контакты организатора: @org_name"
-    background_tasks.add_task(send_max_message, req.user_id, text_for_user)
-    
-    return {"status": "success", "message": "Notifications sent"}
+    background_tasks.add_task(send_max_message, text=text_for_user, target_id=req.user_id)
+    return {"status": "success"}
 
 @app.post("/api/webhook")
 async def max_webhook(request: Request, background_tasks: BackgroundTasks):
-    """Обработка входящих вебхуков от платформы МАХ"""
     data = await request.json()
     
-    message = data.get("message", {})
-    text = message.get("text", "")
-    chat_id = message.get("chat", {}).get("id")
+    message_data = data.get("message") or data.get("payload", {})
+    text = message_data.get("body", {}).get("text", "").strip()
+
+    recipient_data = message_data.get("recipient", {})
+    chat_type = recipient_data.get("chat_type", "dialog")
+    chat_id = recipient_data.get("chat_id")
     
-    if text == "/start" and chat_id:
-        welcome_text = "Привет! Я «Радар досуга». Нажми кнопку ниже, чтобы открыть приложение и найти компанию в Уфе."
-        # В рабочей версии сюда нужно добавить структуру inline-кнопки для открытия Web App (по документации МАХ)
-        background_tasks.add_task(send_max_message, str(chat_id), welcome_text)
+    sender = message_data.get("sender", {})
+    sender_user_id = sender.get("user_id")
+
+    is_group = chat_type != "dialog"
+    target_id = str(chat_id) if is_group else str(sender_user_id)
+
+    if text.startswith("/start"):
+        welcome_text = "Привет! Я «Радар досуга». Нажми на кнопку ниже, чтобы открыть мини-приложение:"
+        background_tasks.add_task(
+            send_max_message,
+            text=welcome_text,
+            target_id=target_id,
+            is_group=is_group,
+            with_webapp=True
+        )
         
     return {"status": "ok"}

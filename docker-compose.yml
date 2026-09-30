@@ -5,12 +5,16 @@ services:
     build: ./backend
     ports:
       - "8000:8000"
-    restart: unless-stopped
+    environment:
+      - MAX_BOT_TOKEN=f9LHodD0cOL5VFLxyvlUr0pgowbe9NfMW02XI41VCwmgvSv91cQz7_1bPZ34wpuRb55aaNAHptfXO_vuZt8B
+      # На сервере WEBAPP_URL нужно будет заменить на реальный IP или домен твоего VPS
+      - WEBAPP_URL=https://saturate-undecided-perfected.ngrok-free.dev
+    volumes:
+      - ./backend/teamplay.db:/app/teamplay.db
+    restart: always
 
   frontend:
     build: ./frontend
     ports:
-      - "5173:80"
-    depends_on:
-      - backend
-    restart: unless-stopped
+      - "5173:80" # Предполагается, что внутри Dockerfile фронтенда используется Nginx на 80 порту
+    restart: always
