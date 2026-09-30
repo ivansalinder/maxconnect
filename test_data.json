@@ -1,0 +1,6 @@
+[
+  {"title": "Баскетбол 3х3", "category": "Спорт", "location": "Парк Кашкадан", "participants": 2, "max_participants": 6, "time": "Сегодня 19:00"},
+  {"title": "Квиз: Эпоха 90-х", "category": "Настолки/Квизы", "location": "Арт-КВАДРАТ", "participants": 3, "max_participants": 5, "time": "Завтра 20:00"},
+  {"title": "Сбор на настолки", "category": "Культура", "location": "Мега Уфа", "participants": 1, "max_participants": 4, "time": "Суббота 15:00"},
+  {"title": "Волейбол", "category": "Спорт", "location": "Манеж УГНТУ", "participants": 8, "max_participants": 12, "time": "Сегодня 21:00"}
+]

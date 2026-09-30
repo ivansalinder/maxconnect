@@ -1,0 +1,17 @@
+version: "1.0"
+team_id: "НазваниеТвоейКоманды"
+base_url: "http://127.0.0.1:8000"
+endpoints:
+  - method: "GET"
+    path: "/api/lobbies"
+    role: "user"
+    expected_status: [200]
+    expected_format:
+      content_type: "application/json"
+      schema: "Array of objects"
+  - method: "POST"
+    path: "/api/join"
+    role: "user"
+    expected_status: [200]
+    expected_format:
+      content_type: "application/json"
